@@ -65,6 +65,8 @@ class EmployerBase(BaseModel):
 # --------- CRUD API Endpoints --------- #
 @app.post("/pocs")
 def create_poc(poc: PoCBase, db: Session = Depends(get_db)):
+    #Ensure phone is stored as a string
+    phone_number = str(poc.phone)
     # Check if email already exists
     existing_poc = db.query(PointOfContact).filter(PointOfContact.email == poc.email).first()
     if existing_poc:
@@ -115,15 +117,22 @@ def delete_poc(poc_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "PoC deleted successfully"}
 
-# Create an Employer
+   # create employers
+    
 @app.post("/employers")
 def create_employer(employer: EmployerBase, db: Session = Depends(get_db)):
+
+    # Check if Employer already exists by name
+    existing_employer = db.query(Employer).filter(Employer.name == employer.name).first()
+    if existing_employer:
+        raise HTTPException(status_code=400, detail="Employer with this name already exists")
+
     # Check if the PoC exists
     if employer.poc_id:
         db_poc = db.query(PointOfContact).filter(PointOfContact.id == employer.poc_id).first()
         if not db_poc:
             raise HTTPException(status_code=400, detail="PoC not found")
-    
+
     db_employer = Employer(name=employer.name, industry=employer.industry, poc_id=employer.poc_id)
     db.add(db_employer)
     db.commit()
