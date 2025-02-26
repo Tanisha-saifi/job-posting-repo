@@ -1,8 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey ,Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, Session
 from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
+
 from typing import Optional
 
 # Database Setup
@@ -11,6 +14,13 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# Association Table for Many-to-Many Relationship
+employer_poc_association = Table(
+    "employer_poc_association",
+    Base.metadata,
+    Column("employer_id", Integer, ForeignKey("employers.id"), primary_key=True),
+    Column("poc_id", Integer, ForeignKey("pocs.id"), primary_key=True)
+)
 # Employer Table
 class Employer(Base):
     __tablename__ = "employers"
@@ -18,10 +28,10 @@ class Employer(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
     industry = Column(String)
-    poc_id = Column(Integer, ForeignKey("pocs.id", ondelete="SET NULL"), nullable=True)
+    
 
-    poc = relationship("PointOfContact", back_populates="employers", foreign_keys=[poc_id])
-
+ # Many-to-Many Relationship with PoCs
+    pocs = relationship("PointOfContact", secondary=employer_poc_association, back_populates="employers")
 # Point-of-Contact Table
 class PointOfContact(Base):
     __tablename__ = "pocs"
@@ -31,7 +41,9 @@ class PointOfContact(Base):
     email = Column(String, unique=True, index=True)
     phone = Column(String, unique=True)
 
-    employers = relationship("Employer", back_populates="poc", cascade="all, delete-orphan")
+ # Many-to-Many Relationship with Employers
+    employers = relationship("Employer", secondary=employer_poc_association, back_populates="pocs")
+
 
 # Create Database
 def create_database():
@@ -54,13 +66,13 @@ def get_db():
 # Pydantic Models (Input Validation)
 class PoCBase(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     phone: str
 
 class EmployerBase(BaseModel):
     name: str
     industry: str
-    poc_id: Optional[int] = None  # PoC is optional
+    poc_ids: List[int] =[] # Accept multiple PoC IDs
 
 # --------- CRUD API Endpoints --------- #
 @app.post("/pocs")
@@ -127,22 +139,38 @@ def create_employer(employer: EmployerBase, db: Session = Depends(get_db)):
     if existing_employer:
         raise HTTPException(status_code=400, detail="Employer with this name already exists")
 
-    # Check if the PoC exists
-    if employer.poc_id:
-        db_poc = db.query(PointOfContact).filter(PointOfContact.id == employer.poc_id).first()
-        if not db_poc:
-            raise HTTPException(status_code=400, detail="PoC not found")
+    # Ensure PoC IDs are provided and exist
+    poc_list = []
+    if employer.poc_ids:
+        poc_list = db.query(PointOfContact).filter(PointOfContact.id.in_(employer.poc_ids)).all()
+        if len(poc_list) != len(employer.poc_ids):
+            raise HTTPException(status_code=400, detail="One or more PoC IDs not found")
 
-    db_employer = Employer(name=employer.name, industry=employer.industry, poc_id=employer.poc_id)
+    # Create employer
+    db_employer = Employer(name=employer.name, industry=employer.industry, pocs=poc_list)
+
+    # Link employer to multiple PoCs
+    db_employer.pocs = poc_list  #  assign multiple PoCs
+
     db.add(db_employer)
     db.commit()
     db.refresh(db_employer)
+    
     return {"message": "Employer created successfully", "employer_id": db_employer.id}
 
 # Get all Employers
 @app.get("/employers")
 def get_employers(db: Session = Depends(get_db)):
-    return db.query(Employer).all()
+    employers = db.query(Employer).all()
+    return [
+        {
+            "id": emp.id,
+            "name": emp.name,
+            "industry": emp.industry,
+            "pocs": [{"id": poc.id, "name": poc.name, "email": poc.email, "phone": poc.phone} for poc in emp.pocs]
+        }
+        for emp in employers
+    ]
 
 # Get a single Employer by ID
 @app.get("/employers/{employer_id}")
@@ -150,7 +178,14 @@ def get_employer(employer_id: int, db: Session = Depends(get_db)):
     employer = db.query(Employer).filter(Employer.id == employer_id).first()
     if not employer:
         raise HTTPException(status_code=404, detail="Employer not found")
-    return employer
+
+    return {
+        "id": employer.id,
+        "name": employer.name,
+        "industry": employer.industry,
+        "pocs": [{"id": poc.id, "name": poc.name, "email": poc.email, "phone": poc.phone} for poc in employer.pocs]
+    }
+
 
 # Update an Employer
 @app.put("/employers/{employer_id}")
@@ -159,13 +194,22 @@ def update_employer(employer_id: int, employer: EmployerBase, db: Session = Depe
     if not db_employer:
         raise HTTPException(status_code=404, detail="Employer not found")
     
+    # Fetch updated PoCs
+    db_pocs = db.query(PointOfContact).filter(PointOfContact.id.in_(employer.poc_ids)).all()
+
+    # Validate PoC IDs
+    if len(db_pocs) != len(employer.poc_ids):
+        raise HTTPException(status_code=400, detail="One or more PoCs not found")
+
+    # Update Employer fields
     db_employer.name = employer.name
     db_employer.industry = employer.industry
-    db_employer.poc_id = employer.poc_id
-    
+    db_employer.pocs = db_pocs  # Update PoC assignments
+
     db.commit()
     db.refresh(db_employer)
     return {"message": "Employer updated successfully", "employer": db_employer}
+
 
 # Delete an Employer
 @app.delete("/employers/{employer_id}")
