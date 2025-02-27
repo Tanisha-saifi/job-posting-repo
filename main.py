@@ -63,8 +63,8 @@ class PointOfContact(Base):
     employers = relationship("Employer", secondary=employer_poc_association, back_populates="pocs")
 
 def create_database():
-    Base.metadata.drop_all(bind=engine)  # ⚠️ Deletes all existing tables
-    Base.metadata.create_all(bind=engine)  # ✅ Recreates tables
+
+    Base.metadata.create_all(bind=engine)  
 
 
 # Initialize FastAPI
