@@ -14,17 +14,24 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+
 # Company Table
 class Company(Base):
     __tablename__ = "companies"
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True)
-    industry = Column(String)
+    industry = Column(String ,nullable=True)
+    about = Column(String, nullable=True)
+    title = Column(String)
+    description = Column(String)
+    website = Column(String, nullable=True)
+    email = Column(String,nullable=False, unique=True, index=True)
+    phone = Column(String, unique=True ,nullable=True)
+    location = Column(String,nullable=True)
+    established = Column(Integer,nullable=True)
     
-    # One-to-Many: A company can have multiple employers
     employers = relationship("Employer", back_populates="company")
-
 
 # Association Table for Many-to-Many Relationship
 employer_poc_association = Table(
@@ -64,7 +71,8 @@ class PointOfContact(Base):
 
 def create_database():
 
-    Base.metadata.create_all(bind=engine)  
+     Base.metadata.drop_all(bind=engine)  # Drops all tables
+     Base.metadata.create_all(bind=engine)  # Creates new tables
 
 
 # Initialize FastAPI
@@ -85,7 +93,14 @@ def get_db():
 class CompanyBase(BaseModel):
     name: str
     industry: str
-
+    about: str
+    location: str
+    description: str
+    title: str
+    website: str
+    email: EmailStr
+    phone: str
+    established: int
 
 
 class PoCBase(BaseModel):
@@ -110,12 +125,11 @@ def create_company(company: CompanyBase, db: Session = Depends(get_db)):
     existing_company = db.query(Company).filter(Company.name == company.name).first()
     if existing_company:
         raise HTTPException(status_code=400, detail="Company already exists")
-
-    db_company = Company(name=company.name, industry=company.industry)
+    
+    db_company = Company(**company.dict())
     db.add(db_company)
     db.commit()
     db.refresh(db_company)
-    
     return {"message": "Company created successfully", "company_id": db_company.id}
 
 # Get all companies
@@ -203,7 +217,7 @@ def create_employer(employer: EmployerBase, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="One or more PoC IDs not found")
 
     # Create employer
-    db_employer = Employer(name=employer.name, industry=employer.industry, pocs=poc_list , email=employer.email, phone=employer.phone, company_id=employer.company_id)
+    db_employer = Employer(name=employer.name, pocs=poc_list , email=employer.email, phone=employer.phone, company_id=employer.company_id)
 
     # Link employer to multiple PoCs
     db_employer.pocs = poc_list  #  assign multiple PoCs
